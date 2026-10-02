@@ -348,10 +348,13 @@ async function syncRelayRosters() {
 
   try {
     const connections = await relayConnections()
+
     if (!isCurrent()) {
       return
     }
+
     const labels = await connectionLabels()
+
     if (!isCurrent()) {
       return
     }
@@ -369,6 +372,7 @@ async function syncRelayRosters() {
             if (!isCurrent()) {
               return false
             }
+
             try {
               await host.requestProfile(connection.route, 'bot_relay.roster.sync', { agents: [] })
 
@@ -397,6 +401,7 @@ async function syncRelayRosters() {
     await Promise.all(
       connections.map(async connection => {
         const agents = await relayAgentsOn(connection, labels)
+
         if (!isCurrent()) {
           return
         }
@@ -433,6 +438,7 @@ async function syncRelayRosters() {
         if (!isCurrent()) {
           return
         }
+
         const others: RelayAgentRow[] = []
 
         for (const [id, agents] of agentsByConnection) {
