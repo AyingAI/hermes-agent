@@ -5053,43 +5053,9 @@ def _resolve_xai_oauth_branch(req: _ResolveRequest) -> _ResolveResult:
                           "OAuth token found (run: hermes model -> xAI Grok OAuth — SuperGrok / Premium+)")
 
 
-_LLAMACPP_ALIASES = ("llamacpp", "llama.cpp", "llama-cpp")
-
-
-def _managed_llamacpp_endpoint() -> Optional[Dict[str, Any]]:
-    """Live endpoint of the supervised local llama.cpp server, or None when it is not running.
-
-    Best-effort: any failure (no state file, import error, server off) returns None so the caller
-    keeps its original fall-through instead of erroring an auxiliary/fallback call.
-    """
-    try:
-        from hermes_cli.local_runtime.endpoint import resolve_llamacpp_endpoint
-        return resolve_llamacpp_endpoint(wait_for_boot_s=2.0)
-    except Exception:  # noqa: BLE001 — endpoint resolution is best-effort
-        logger.debug("resolve_provider_client: managed llama.cpp endpoint unavailable", exc_info=True)
-        return None
-
-
 def _resolve_custom_branch(req: _ResolveRequest) -> _ResolveResult:
     """Custom endpoint (OPENAI_BASE_URL + OPENAI_API_KEY)."""
     provider, model, main_runtime = req.provider, req.model, req.main_runtime
-    # A llama.cpp alias with nothing explicit must resolve to the MANAGED local server — the same
-    # rung the main ladder takes (_resolve_llamacpp_runtime). Without it the fall-through below
-    # reached _try_custom_endpoint / _resolve_api_key_provider and handed back whichever cloud
-    # API-key provider happened to hold credentials, so the fallback path (try_activate_fallback
-    # resolves through THIS function) posted a local model slug to e.g. Gemini and got
-    # "unexpected model name format" (400) back, which then surfaced as a bogus
-    # "server rejected this request as too large" context rejection. Re-entering with the managed
-    # endpoint set keeps every downstream rule (alias /v1 tail, alias key scoping) in force, and
-    # the endpoint stays live: port and per-install key are re-read on every resolve.
-    if (req.original_provider in _LLAMACPP_ALIASES and not req.explicit_base_url
-            and req.main_runtime is None):
-        endpoint = _managed_llamacpp_endpoint()
-        if endpoint and str(endpoint.get("base_url") or "").strip():
-            return _resolve_custom_branch(req._replace(
-                explicit_base_url=str(endpoint["base_url"]),
-                explicit_api_key=req.explicit_api_key or str(endpoint.get("api_key") or ""),
-            ))
     # wrap_base: base for the Anthropic-wrap decision. anthropic_messages must keep the raw
     # /anthropic base while the plain OpenAI client uses the /v1-rewritten custom_base (never
     # /anthropic/chat/completions). Empty means "use custom_base".
@@ -5471,6 +5437,13 @@ def resolve_provider_client(
             if explicit_base_url and str(explicit_base_url).lower().startswith("moa://"):
                 explicit_base_url = None
                 explicit_api_key = None
+    from agent.auxiliary_local_runtime import bare_llamacpp_endpoint
+    local = bare_llamacpp_endpoint(original_provider, explicit_base_url, explicit_api_key)
+    if local is not None:
+        if not local[0]:
+            logger.warning("resolve_provider_client: %s requested but no local llama.cpp server is running", original_provider)
+            return None, None
+        explicit_base_url, explicit_api_key = local
     # Model for concrete providers: caller ``model`` → catalog default (empty for OAuth-gated providers whose
     # lists drift) → configured main model (MoA → aggregator), keeping OAuth aux tasks off the Step-2 fallback.
     # Excluded: ``auto`` (a stale main slug could pair with any picked provider) and Nous + vision (the
@@ -5713,7 +5686,8 @@ def resolve_vision_provider_client(
     requested, resolved_model, resolved_base_url, resolved_api_key, resolved_api_mode = _resolve_task_provider_model(
         "vision", provider, model, base_url, api_key
     )
-    requested = _normalize_vision_provider(requested)
+    # The raw name keeps a llama.cpp alias distinguishable from bare ``custom`` for the last resolve.
+    raw_requested, requested = requested, _normalize_vision_provider(requested)
     if resolved_base_url:
         provider_for_base_override = requested if requested and requested not in {"", "auto"} else "custom"
         client, final_model = resolve_provider_client(
@@ -5738,7 +5712,7 @@ def resolve_vision_provider_client(
                 return _finalize_vision_client(requested, client, final_model, resolved_model, async_mode)
         # Fallback: try without explicit base_url (old behavior)
     client, final_model = _get_cached_client(
-        requested, resolved_model, async_mode, api_mode=resolved_api_mode, main_runtime=runtime, is_vision=True,
+        raw_requested, resolved_model, async_mode, api_mode=resolved_api_mode, main_runtime=runtime, is_vision=True,
     )
     return requested, client, (final_model if client is not None else None)
 
@@ -6020,6 +5994,14 @@ def _get_cached_client(
     previously occurred in long-running gateways where recycled worker threads created unbounded entries
     (#10200).
     """
+    # A bare llama.cpp alias keys on the live local endpoint: a restarted server (new port/key)
+    # must not be served the old client, and a stopped one resolves to nothing, not a cloud client.
+    from agent.auxiliary_local_runtime import bare_llamacpp_endpoint
+    local = bare_llamacpp_endpoint(provider, base_url, api_key)
+    if local is not None:
+        if not local[0]:
+            return None, None
+        base_url, api_key = local
     current_loop = _current_event_loop() if async_mode else None
     runtime = _normalize_main_runtime(main_runtime)
     cache_key = _client_cache_key(
