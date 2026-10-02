@@ -11,8 +11,8 @@
  *
  * - an answer the model sent before a housekeeping tool, which the backend
  *   repeats as the final reply (interim + identical final), with and without
- *   a review.summary row delivered before that turn's message.complete
- *   (#131626: a slow end-of-turn flush lets the review fork's row win);
+ *   a review.summary row delivered before that turn's message.complete (the
+ *   #131626 report: a slow end-of-turn flush lets the review fork's row win);
  * - a steer at each point of a tool turn: reasoning, the narration before a
  *   tool, the running tool, the answer after it, and twice in a row;
  * - then a reload and a switch away and back, where the tool turns fold into
@@ -36,14 +36,8 @@ import {
   writeProviderHome,
   type WsRecorder
 } from './harness'
-import { expectNoSymptom } from './known'
 import { assertTranscriptOracle, installDuplicateSampler, type OracleTarget } from './oracle'
 import { gate, type ScriptedProvider, startScriptedProvider } from './provider'
-
-const KNOWN: Record<string, string | undefined> = {
-  reviewRow:
-    '#131626 an answer repeated as the final reply renders twice when a review.summary row lands between the interim and the final'
-}
 
 // Review after every turn, so a review fork is in flight during the next one.
 const REVIEW_EVERY_TURN = `memory:
@@ -249,12 +243,9 @@ test('an answer repeated as the final reply renders once, with or without a row 
       await expect(rows).toHaveCount(1, { timeout: 60_000 })
     })
 
-    let live = 0
-    let symptom = false
-
-    await test.step('a review row lands between the interim and the final', async () => {
+    await test.step('a review row delivered before the final', async () => {
       // The review fork starts before the turn's message.complete is sent; when
-      // the end-of-turn flush is slow its row reaches the client first.
+      // the end-of-turn flush is slow its row reaches the client first (#131626).
       frames.hold = eventOf('message.complete', A(2))
       frames.until = eventOf('review.summary')
       repeatedFinal(2)
@@ -265,26 +256,8 @@ test('an answer repeated as the final reply renders once, with or without a row 
       await expect(rows).toHaveCount(2, { timeout: 30_000 })
       await settled(page, ws, A(2))
       session.expectUserMarkers.push(U(2))
-
-      // Converge with a deadline; a duplicate never heals, so the deadline only
-      // waits out a legitimately slow settle.
-      symptom = await expect
-        .poll(async () => (live = (await viewport(page).innerText()).split(A(2)).length - 1), { timeout: 15_000 })
-        .toBe(1)
-        .then(() => false)
-        .catch(() => true)
-
-      if (!symptom) {
-        await assertTranscriptOracle(page, ws, provider, session, 'review row between interim and final')
-      }
+      await assertTranscriptOracle(page, ws, provider, session, 'review row before the final')
     })
-
-    expectNoSymptom(
-      KNOWN.reviewRow,
-      symptom,
-      `the answer ${A(2)} renders twice around the review row`,
-      `rendered ${live}x`
-    )
   })
 })
 

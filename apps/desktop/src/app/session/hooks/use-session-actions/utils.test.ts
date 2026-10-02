@@ -2152,6 +2152,39 @@ describe('overlayConcurrentMessageChanges', () => {
     ])
   })
 
+  // The same race on a tool turn: history folds the narration, the tool and
+  // the reply into one bubble under the narration's row, so its text never
+  // equals the settled live reply. The reply's stored row still matches.
+  it('keeps one reply for a tool turn that completes while the switch-back hydrate is in flight', () => {
+    const baseline = [
+      msg('user-optimistic', 'user', 'prompt b'),
+      msg('assistant-stream-1-3', 'assistant', 'A2 ', { pending: true })
+    ]
+
+    const settled = msg('assistant-stream-1-3', 'assistant', 'A2 finished while away', {
+      pending: false,
+      rowId: 6,
+      parts: [{ type: 'text', text: 'A2 finished while away', sourceRowId: 6 }]
+    })
+
+    const folded = msg('4-assistant', 'assistant', '', {
+      rowId: 4,
+      parts: [
+        { type: 'text', text: 'A2i checking', sourceRowId: 4 },
+        { type: 'tool-call', toolCallId: 'call-1', toolName: 'terminal', args: {}, argsText: '{}', result: 'ok' },
+        { type: 'text', text: 'A2 finished while away', sourceRowId: 6 }
+      ]
+    } as Partial<ChatMessage>)
+
+    const overlaid = overlayConcurrentMessageChanges(
+      [msg('3-user', 'user', 'prompt b', { rowId: 3 }), folded],
+      baseline,
+      [baseline[0], settled]
+    )
+
+    expect(overlaid.map(message => message.id)).toEqual(['3-user', '4-assistant'])
+  })
+
   // The same prompt sent again (from another client, so the cache lacks its
   // row) streams the same opening as the previous answer. The cached-transcript
   // path must keep that NEXT turn's stream, and an errored settled row keeps

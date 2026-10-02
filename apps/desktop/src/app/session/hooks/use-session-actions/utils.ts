@@ -1652,6 +1652,7 @@ export function overlayConcurrentMessageChanges(
     if (current.role === 'assistant' && current.pending !== true && !current.error && isLiveTailReplyId(current.id)) {
       const text = textWithoutReferenceLines(chatMessageText(current)).trim()
       const lastUser = overlaid.findLastIndex(message => message.role === 'user')
+      const liveRows = transcriptRowIds(current)
 
       const committed = overlaid.some((message, index) => {
         if (
@@ -1661,6 +1662,13 @@ export function overlayConcurrentMessageChanges(
           isLiveTailRow(message)
         ) {
           return false
+        }
+
+        // The completion bound the reply to its stored row. A tool turn's
+        // history folds that row into the bubble that opened the turn, whose
+        // text also carries the narration, so match the row, not the words.
+        if (liveRows.length && transcriptRowIds(message).some(id => liveRows.includes(id))) {
+          return true
         }
 
         // The committed row and the settled live row capture the same reply

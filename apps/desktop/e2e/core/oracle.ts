@@ -379,6 +379,15 @@ function wireViolations(
 
 // ─── The oracle ─────────────────────────────────────────────────────────
 
+// A steer that lands at a tool boundary is stored as its own user row, wrapped
+// for the model in the out-of-band marker (agent/prompt_builder.py); the user
+// sees only their words.
+const STEER_RE = /\[OUT-OF-BAND USER MESSAGE[^\]]*\]\s*([\s\S]*?)\s*\[\/OUT-OF-BAND USER MESSAGE\]/
+
+function unwrapSteer(content: string): string {
+  return STEER_RE.exec(content)?.[1] ?? content
+}
+
 export interface OracleTarget {
   /** Stored session id (the route id). */
   sessionId: string
@@ -391,7 +400,11 @@ export interface OracleTarget {
 
 function transcriptViolations(persisted: PersistedMessage[], view: RenderedView, target: OracleTarget): string[] {
   const problems: string[] = []
-  const rows = persisted.filter(m => (m.role === 'user' || m.role === 'assistant') && norm(m.content))
+
+  const rows = persisted
+    .filter(m => (m.role === 'user' || m.role === 'assistant') && norm(m.content))
+    .map(m => (m.role === 'user' ? { ...m, content: unwrapSteer(m.content) } : m))
+
   const persistedMarkers = new Set<string>()
 
   for (const marker of target.expectUserMarkers) {

@@ -16,8 +16,10 @@
  *
  * Each order also runs with a tool turn (narration, a tool, then the held
  * answer). History folds that turn into one bubble keyed by its first row
- * while the live reply is keyed by its last (#128809), so the hydrate and the
- * completion disagree on which message the answer belongs to.
+ * while the live reply is keyed by its last (#128809), and the folded text
+ * carries the narration too. complete-before-hydrate (tool turn) was red on
+ * base (the settled live reply painted beside the folded bubble); the overlay
+ * now matches the reply's stored row instead of its words.
  */
 
 import { expect, type Page, test } from '@playwright/test'
