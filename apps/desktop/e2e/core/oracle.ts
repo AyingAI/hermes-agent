@@ -14,8 +14,9 @@
  * renderer groups bubbles (live vs hydrated grouping legitimately differs).
  *
  * Final-state checks converge with a deadline (hydration is asynchronous);
- * transient duplicates are caught separately by an in-page MutationObserver
- * sampler that is never allowed to see a marker twice.
+ * transient faults are caught separately by an in-page MutationObserver
+ * sampler that is never allowed to see a marker twice, a reply above its own
+ * prompt, or two messages swap places between frames.
  */
 
 import { expect, type Page } from '@playwright/test'
@@ -54,7 +55,7 @@ export function userMarkerFor(marker: string): string {
   return marker.replace(/^[AR](\d+)i?-/, 'U$1-')
 }
 
-// ─── Transient-duplicate sampler ────────────────────────────────────────
+// ─── Transient duplicate / order sampler ────────────────────────────────
 
 /** Idempotent; re-run after every reload (the observer dies with the document). */
 export async function installDuplicateSampler(page: Page): Promise<void> {
@@ -66,8 +67,25 @@ export async function installDuplicateSampler(page: Page): Promise<void> {
     }
 
     const re = new RegExp(source, 'g')
-    w.__coreSampler = { samples: 0, violations: [] as { marker: string; count: number; text: string }[] }
+    w.__coreSampler = {
+      samples: 0,
+      violations: [] as { marker: string; count: number; text: string }[],
+      order: [] as { detail: string; text: string }[]
+    }
+    // "x|y": x has been seen above y. A later frame with y above x is a flip.
+    const above = new Set<string>()
     let scheduled = false
+
+    const orderViolation = (detail: string, text: string) => {
+      if (w.__coreSampler.order.length < 20) {
+        w.__coreSampler.order.push({
+          detail,
+          at: Math.round(performance.now()),
+          route: location.hash,
+          text: text.replace(/\s+/g, ' ').slice(0, 600)
+        })
+      }
+    }
 
     const sample = () => {
       scheduled = false
@@ -85,6 +103,26 @@ export async function installDuplicateSampler(page: Page): Promise<void> {
         for (const match of text.match(re) ?? []) {
           counts.set(match, (counts.get(match) ?? 0) + 1)
         }
+
+        // Message order, top to bottom by first appearance. Reasoning is left
+        // out: live and history place the thinking block differently.
+        const sequence = [...counts.keys()].filter(marker => !marker.startsWith('R'))
+
+        sequence.forEach((marker, index) => {
+          const prompt = marker.replace(/^A(\d+)i?-/, 'U$1-')
+
+          if (prompt !== marker && sequence.indexOf(prompt) > index) {
+            orderViolation(`reply ${marker} rendered above its prompt ${prompt}`, text)
+          }
+
+          for (const later of sequence.slice(index + 1)) {
+            if (above.has(`${later}|${marker}`)) {
+              orderViolation(`${marker} moved above ${later}`, text)
+            }
+
+            above.add(`${marker}|${later}`)
+          }
+        })
 
         for (const [marker, count] of counts) {
           if (count > 1 && w.__coreSampler.violations.length < 20) {
@@ -121,8 +159,8 @@ export async function installDuplicateSampler(page: Page): Promise<void> {
   }, ANY_MARKER_RE.source)
 }
 
-async function samplerViolations(page: Page): Promise<{ samples: number; violations: any[] }> {
-  return page.evaluate(() => (window as any).__coreSampler ?? { samples: 0, violations: [] })
+async function samplerViolations(page: Page): Promise<{ order: any[]; samples: number; violations: any[] }> {
+  return page.evaluate(() => (window as any).__coreSampler ?? { order: [], samples: 0, violations: [] })
 }
 
 // ─── Rendered view ──────────────────────────────────────────────────────
@@ -475,4 +513,5 @@ export async function assertTranscriptOracle(
   expect(transient.violations, `transient duplicate render during [${label}] (${transient.samples} samples)`).toEqual(
     []
   )
+  expect(transient.order, `transient misordered render during [${label}] (${transient.samples} samples)`).toEqual([])
 }

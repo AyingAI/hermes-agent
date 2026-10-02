@@ -14,6 +14,9 @@ A small, deterministic Electron suite that guards three issue classes end to end
   - no marker is ever rendered twice, even transiently (in-page
     MutationObserver sampler — the #120005 garble healed on its own in the
     final DOM, so a final-state check alone misses it);
+  - no message is ever rendered out of order, even transiently: the same
+    sampler fails a reply above its own prompt and two messages that swap
+    places between frames;
   - backend stream integrity: each turn's concatenated `message.delta` /
     `reasoning.delta` equals what the provider streamed, and
     `message.complete` equals the final completion.
