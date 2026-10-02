@@ -317,7 +317,12 @@ test('a steer at every point of a tool turn, then reload and switch back', async
       await steer('tool', 5, 6, () =>
         expect.poll(() => fs.existsSync(ready), { timeout: 60_000, message: 'tool started' }).toBe(true)
       )
+      // The steer hands the running command to the background; finishing it
+      // starts a notification turn (a process_complete row, not a user bubble).
+      provider.scriptPrompt('process', 'Background process', [{ text: words(A(20), 'noted', 'the', 'process') }])
       fs.writeFileSync(release, '')
+      await settled(page, ws, A(20))
+      await assertTranscriptOracle(page, ws, provider, session, 'background process after a steered tool')
     })
 
     await test.step('steer while the answer after a tool streams', async () => {

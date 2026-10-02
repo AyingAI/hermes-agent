@@ -388,6 +388,20 @@ function unwrapSteer(content: string): string {
   return STEER_RE.exec(content)?.[1] ?? content
 }
 
+// Rows the backend writes itself (hydration.ts NOTICE_DISPLAY_KINDS, plus
+// hidden scaffolding): drawn as a notice or not at all, never as a message.
+const NOTICE_KINDS = new Set([
+  'model_switch',
+  'async_delegation_complete',
+  'process_complete',
+  'auto_continue',
+  'personality_switch',
+  'failed_turn',
+  'hidden'
+])
+
+const isNotice = (m: PersistedMessage) => m.displayKind !== undefined && NOTICE_KINDS.has(m.displayKind)
+
 export interface OracleTarget {
   /** Stored session id (the route id). */
   sessionId: string
@@ -402,7 +416,7 @@ function transcriptViolations(persisted: PersistedMessage[], view: RenderedView,
   const problems: string[] = []
 
   const rows = persisted
-    .filter(m => (m.role === 'user' || m.role === 'assistant') && norm(m.content))
+    .filter(m => (m.role === 'user' || m.role === 'assistant') && !isNotice(m) && norm(m.content))
     .map(m => (m.role === 'user' ? { ...m, content: unwrapSteer(m.content) } : m))
 
   const persistedMarkers = new Set<string>()

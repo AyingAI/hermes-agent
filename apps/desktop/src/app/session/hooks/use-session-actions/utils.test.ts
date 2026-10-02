@@ -2185,6 +2185,61 @@ describe('overlayConcurrentMessageChanges', () => {
     expect(overlaid.map(message => message.id)).toEqual(['3-user', '4-assistant'])
   })
 
+  // Same race, the order the e2e hit: the store already swapped its live rows
+  // for the committed bubble, but the page was composed from the older
+  // baseline and still carries the pending live row, frozen on its first chunk.
+  it('keeps a live row retired while the switch-back hydrate was in flight retired', () => {
+    const live = msg('assistant-stream-1-3', 'assistant', 'A2 ', {
+      pending: true,
+      parts: [
+        { type: 'tool-call', toolCallId: 'call-1', toolName: 'terminal', args: {}, argsText: '{}', result: 'ok' },
+        { type: 'text', text: 'A2 ' }
+      ]
+    } as Partial<ChatMessage>)
+
+    const baseline = [
+      msg('user-optimistic', 'user', 'prompt b'),
+      msg('assistant-stream-1-2', 'assistant', 'A2i checking', { interim: true }),
+      live
+    ]
+
+    const committed = [msg('3-user', 'user', 'prompt b', { rowId: 3 }), msg('4-assistant', 'assistant', 'A2 finished')]
+
+    expect(overlayConcurrentMessageChanges([...committed, live], baseline, committed).map(m => m.id)).toEqual([
+      '3-user',
+      '4-assistant'
+    ])
+  })
+
+  it('does not project a stale snapshot over a committed tool turn', () => {
+    const snapshot = {
+      session_id: 'runtime-b',
+      turn_started_at: 100,
+      inflight: { user: 'prompt b', assistant: 'A2i checking\n\nA2 ', streaming: true }
+    }
+
+    const folded = msg('4-assistant', 'assistant', '', {
+      rowId: 4,
+      timestamp: 105,
+      parts: [
+        { type: 'text', text: 'A2i checking' },
+        { type: 'tool-call', toolCallId: 'call-1', toolName: 'terminal', args: {}, argsText: '{}', result: 'ok' },
+        { type: 'text', text: 'A2 finished while away' }
+      ]
+    } as Partial<ChatMessage>)
+
+    const persisted = [msg('3-user', 'user', 'prompt b', { rowId: 3 }), folded]
+
+    expect(appendLiveSessionProjection(persisted, snapshot).map(m => m.id)).toEqual(['3-user', '4-assistant'])
+
+    // A mid-turn commit ends on its tool: the turn is still running and projects.
+    const partial = { ...folded, parts: folded.parts.slice(0, 2) }
+
+    expect(appendLiveSessionProjection([persisted[0], partial], snapshot).map(m => m.id)).toContain(
+      'assistant-stream-runtime-b'
+    )
+  })
+
   // The same prompt sent again (from another client, so the cache lacks its
   // row) streams the same opening as the previous answer. The cached-transcript
   // path must keep that NEXT turn's stream, and an errored settled row keeps
