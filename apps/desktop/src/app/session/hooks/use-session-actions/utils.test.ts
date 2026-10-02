@@ -2183,6 +2183,16 @@ describe('overlayConcurrentMessageChanges', () => {
     )
 
     expect(overlaid.map(message => message.id)).toEqual(['3-user', '4-assistant'])
+
+    // A completion without a row receipt still matches the folded bubble's answer.
+    const unbound = { ...settled, rowId: undefined, parts: [{ type: 'text' as const, text: 'A2 finished while away' }] }
+
+    expect(
+      overlayConcurrentMessageChanges([msg('3-user', 'user', 'prompt b', { rowId: 3 }), folded], baseline, [
+        baseline[0],
+        unbound
+      ]).map(message => message.id)
+    ).toEqual(['3-user', '4-assistant'])
   })
 
   // Same race, the order the e2e hit: the store already swapped its live rows
@@ -2209,6 +2219,29 @@ describe('overlayConcurrentMessageChanges', () => {
       '3-user',
       '4-assistant'
     ])
+
+    // Or the store still holds that row, now settled onto the reply's stored
+    // row, while the page carries its older streaming copy under the same id.
+    const settled = msg('assistant-stream-1-3', 'assistant', 'A2 finished', {
+      pending: false,
+      rowId: 6,
+      parts: [{ type: 'text', text: 'A2 finished', sourceRowId: 6 }]
+    })
+
+    const folded = msg('4-assistant', 'assistant', '', {
+      rowId: 4,
+      parts: [
+        { type: 'text', text: 'A2i checking', sourceRowId: 4 },
+        { type: 'tool-call', toolCallId: 'call-1', toolName: 'terminal', args: {}, argsText: '{}', result: 'ok' },
+        { type: 'text', text: 'A2 finished', sourceRowId: 6 }
+      ]
+    } as Partial<ChatMessage>)
+
+    expect(
+      overlayConcurrentMessageChanges([committed[0], folded, live], baseline, [baseline[0], baseline[1], settled]).map(
+        m => m.id
+      )
+    ).toEqual(['3-user', '4-assistant'])
   })
 
   it('does not project a stale snapshot over a committed tool turn', () => {

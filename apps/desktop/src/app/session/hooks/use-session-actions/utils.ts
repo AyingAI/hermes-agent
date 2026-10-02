@@ -129,15 +129,19 @@ export function isStrictAnswerTextExtension(next: string, previous: string): boo
  * mid-turn commit ends on a tool call and the turn is still running.
  */
 function committedReplyCovers(message: ChatMessage, snapshot: string): boolean {
-  const lastTool = message.parts.findLastIndex(part => part.type === 'tool-call')
-  const reply = chatMessageText({ ...message, parts: message.parts.slice(lastTool + 1) })
-
   const text = message.parts
     .flatMap(part => (part.type === 'text' ? [part.text] : []))
     .join(' ')
     .replace(/\s+/g, ' ')
 
-  return Boolean(reply.trim()) && isStrictAnswerTextExtension(text, snapshot.replace(/\s+/g, ' '))
+  return Boolean(replyAfterLastTool(message).trim()) && isStrictAnswerTextExtension(text, snapshot.replace(/\s+/g, ' '))
+}
+
+/** A folded tool-turn bubble's answer: its text after the last tool call. */
+function replyAfterLastTool(message: ChatMessage): string {
+  const lastTool = message.parts.findLastIndex(part => part.type === 'tool-call')
+
+  return chatMessageText({ ...message, parts: message.parts.slice(lastTool + 1) })
 }
 
 /**
@@ -1637,42 +1641,26 @@ export function overlayConcurrentMessageChanges(
   const nextIndexById = new Map(nextMessages.map((message, index) => [message.id, index]))
   let changed = false
   const overlaid = [...nextMessages]
+  const dropped = new Set<string>()
 
   let activationStreamIndex = overlaid.findIndex(
     message =>
       message.role === 'assistant' && message.id.startsWith('assistant-stream-') && !baselineById.has(message.id)
   )
 
-  for (const current of currentMessages) {
-    const baseline = baselineById.get(current.id)
-    const changedSinceBaseline = !baseline || !chatMessagesEquivalent(baseline, current)
+  // message.complete settled this stream row while REST was in flight, and
+  // the page already carries the same reply under its committed id (#70209).
+  // Only a row the page newly added counts: one already in the baseline is an
+  // earlier turn's answer (a resent prompt can repeat it word for word). An
+  // errored row carries a failure the committed text cannot show.
+  const committedOnPage = (current: ChatMessage): boolean => {
+    const text = textWithoutReferenceLines(chatMessageText(current)).trim()
+    const lastUser = overlaid.findLastIndex(message => message.role === 'user')
+    const liveRows = transcriptRowIds(current)
 
-    if (!changedSinceBaseline) {
-      continue
-    }
-
-    const nextIndex = nextIndexById.get(current.id)
-
-    if (nextIndex !== undefined) {
-      if (!chatMessagesEquivalent(overlaid[nextIndex], current)) {
-        overlaid[nextIndex] = current
-        changed = true
-      }
-
-      continue
-    }
-
-    // message.complete settled this stream row while REST was in flight, and
-    // the page already carries the same reply under its committed id (#70209).
-    // Only a row the page newly added counts: one already in the baseline is an
-    // earlier turn's answer (a resent prompt can repeat it word for word). An
-    // errored row carries a failure the committed text cannot show.
-    if (current.role === 'assistant' && current.pending !== true && !current.error && isLiveTailReplyId(current.id)) {
-      const text = textWithoutReferenceLines(chatMessageText(current)).trim()
-      const lastUser = overlaid.findLastIndex(message => message.role === 'user')
-      const liveRows = transcriptRowIds(current)
-
-      const committed = overlaid.some((message, index) => {
+    return (
+      Boolean(text) &&
+      overlaid.some((message, index) => {
         if (
           !(index > lastUser) ||
           message.role !== 'assistant' ||
@@ -1693,19 +1681,54 @@ export function overlayConcurrentMessageChanges(
         // at two moments while it kept streaming, so neither side is
         // guaranteed to be textually identical: accept either as a forward
         // text-extension of the other, the same trade
-        // removeRepresentedLocalLiveProjection made in 2494b95929.
-        const candidate = textWithoutReferenceLines(chatMessageText(message)).trim()
+        // removeRepresentedLocalLiveProjection made in 2494b95929. A folded
+        // tool turn is compared by its answer, the text after its last tool.
+        return [chatMessageText(message), replyAfterLastTool(message)].some(full => {
+          const candidate = textWithoutReferenceLines(full).trim()
 
-        return (
-          candidate === text ||
-          isStrictAnswerTextExtension(candidate, text) ||
-          isStrictAnswerTextExtension(text, candidate)
-        )
+          return (
+            candidate === text ||
+            isStrictAnswerTextExtension(candidate, text) ||
+            isStrictAnswerTextExtension(text, candidate)
+          )
+        })
       })
+    )
+  }
 
-      if (text && committed) {
-        continue
+  for (const current of currentMessages) {
+    const baseline = baselineById.get(current.id)
+    const changedSinceBaseline = !baseline || !chatMessagesEquivalent(baseline, current)
+
+    if (!changedSinceBaseline) {
+      continue
+    }
+
+    const nextIndex = nextIndexById.get(current.id)
+
+    // The page can still carry the row's older streaming copy by id when it
+    // was composed from the baseline; the committed row replaces both.
+    if (
+      current.role === 'assistant' &&
+      current.pending !== true &&
+      !current.error &&
+      isLiveTailReplyId(current.id) &&
+      committedOnPage(current)
+    ) {
+      if (nextIndex !== undefined) {
+        dropped.add(current.id)
       }
+
+      continue
+    }
+
+    if (nextIndex !== undefined) {
+      if (!chatMessagesEquivalent(overlaid[nextIndex], current)) {
+        overlaid[nextIndex] = current
+        changed = true
+      }
+
+      continue
     }
 
     if (activationStreamIndex >= 0 && current.role === 'assistant' && current.id.startsWith('assistant-stream-')) {
@@ -1738,7 +1761,7 @@ export function overlayConcurrentMessageChanges(
   const currentIds = new Set(currentMessages.map(message => message.id))
 
   const retired = (message: ChatMessage) =>
-    isLiveTailRow(message) && baselineById.has(message.id) && !currentIds.has(message.id)
+    dropped.has(message.id) || (isLiveTailRow(message) && baselineById.has(message.id) && !currentIds.has(message.id))
 
   if (currentMessages.length && overlaid.some(retired)) {
     return overlaid.filter(message => !retired(message))
