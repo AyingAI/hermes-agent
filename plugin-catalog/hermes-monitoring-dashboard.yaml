@@ -1,14 +1,15 @@
 name: hermes-monitoring-dashboard
 title: Monitoring Dashboard
 repo: https://github.com/austinpickett/hermes-monitoring-dashboard
-sha: bc19ef85996b7d3b768f0b509b7337db3b9bf964
+subdir: plugin
+sha: ec61fbd5fa75f40463839e2049e25d1645338b28
 version: "1.0.1"
 description: Prompt-customizable desktop dashboard with live host metrics, session activity, clocks, calendars, and text widgets.
 maintainer: austinpickett
 tier: community
 category: desktop
-docs_url: https://github.com/austinpickett/hermes-monitoring-dashboard#readme
-image: https://raw.githubusercontent.com/austinpickett/hermes-monitoring-dashboard/bc19ef85996b7d3b768f0b509b7337db3b9bf964/assets/hermes-cyanotype.jpg
+docs_url: https://github.com/austinpickett/hermes-monitoring-dashboard/blob/ec61fbd5fa75f40463839e2049e25d1645338b28/plugin/README.md
+image: https://raw.githubusercontent.com/austinpickett/hermes-monitoring-dashboard/ec61fbd5fa75f40463839e2049e25d1645338b28/assets/hermes-cyanotype.jpg
 readme: true
 platforms: []
 capabilities:
